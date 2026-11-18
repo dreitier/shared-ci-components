@@ -1,0 +1,74 @@
+name: Release
+
+# On every push to main: CI, then semantic-release (tag vX.Y.Z, CHANGELOG.md, GitHub release) with the
+# GitHub App dreitier-release-bot. Callers pin the actions by commit SHA with the tag as comment
+# (`uses: dreitier/shared-ci-components/sbom@<sha> # v1.2.3`); Dependabot/Renovate update them.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  semantic-release:
+    name: Version & GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    # all writes use the GitHub App token, which may bypass the ruleset of main
+    permissions:
+      contents: read
+    steps:
+      - name: Create GitHub App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # semantic-release authenticates git pushes with GITHUB_TOKEN itself
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install semantic-release
+        run: npm ci --ignore-scripts
+
+      - name: Get bot identity for the release commit
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          {
+            echo "name=${APP_SLUG}[bot]"
+            echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run semantic-release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          GIT_AUTHOR_NAME: ${{ steps.bot.outputs.name }}
+          GIT_AUTHOR_EMAIL: ${{ steps.bot.outputs.email }}
+          GIT_COMMITTER_NAME: ${{ steps.bot.outputs.name }}
+          GIT_COMMITTER_EMAIL: ${{ steps.bot.outputs.email }}

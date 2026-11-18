@@ -1,0 +1,116 @@
+name: Cosign keyless signature (+ SLSA provenance)
+description: >-
+  Signs an image digest with keyless cosign (GitHub OIDC → Fulcio, public Sigstore) and optionally attaches
+  a minimal SLSA v1 build provenance attestation (cosign attest). The certificate identity is the CALLING
+  workflow (composite action), e.g. https://github.com/dreitier/<repo>/.github/workflows/release.yml@refs/heads/main.
+  The calling job needs `id-token: write` and must be logged in to the registries.
+  Public repositories can use actions/attest-build-provenance instead of `provenance`; private ones can't
+  without GitHub Enterprise Cloud.
+inputs:
+  images:
+    description: Image names without tag, one per line (the same digest in several registries)
+    required: true
+  digest:
+    description: Image digest (sha256:...)
+    required: true
+  provenance:
+    description: Also attach a SLSA v1 provenance attestation (GitHub context only – the statement is public)
+    default: 'false'
+  version:
+    description: Released version (provenance – resolved dependency refs/tags/<version>)
+    default: ''
+  revision:
+    description: Commit the image was built from (provenance; default github.sha)
+    default: ''
+  cosign-release:
+    description: cosign version
+    default: v3.1.3
+runs:
+  using: composite
+  steps:
+    - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      with:
+        cosign-release: ${{ inputs.cosign-release }}
+
+    - name: Check inputs
+      shell: bash
+      env:
+        DIGEST: ${{ inputs.digest }}
+      run: |
+        if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::digest must be sha256:<64 hex>, got '${DIGEST}'"
+          exit 1
+        fi
+
+    - name: Sign
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        DIGEST: ${{ inputs.digest }}
+      run: |
+        while read -r image; do
+          [ -n "${image}" ] || continue
+          cosign sign --yes "${image}@${DIGEST}"
+        done <<<"${IMAGES}"
+
+    # SLSA v1 provenance (same build type as actions/attest-build-provenance). Never add build args, paths or
+    # file contents: the signed statement goes through the public Sigstore instance.
+    - name: Write build provenance
+      if: ${{ inputs.provenance == 'true' }}
+      shell: bash
+      env:
+        REVISION: ${{ inputs.revision || github.sha }}
+        VERSION: ${{ inputs.version }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        EVENT_NAME: ${{ github.event_name }}
+        REPOSITORY_ID: ${{ github.repository_id }}
+        OWNER_ID: ${{ github.repository_owner_id }}
+        RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      run: |
+        workflow_path="${WORKFLOW_REF#"${GITHUB_REPOSITORY}/"}"
+        workflow_path="${workflow_path%%@*}"
+        source_ref="${GITHUB_REF}"
+        if [ -n "${VERSION}" ]; then
+          source_ref="refs/tags/${VERSION}"
+        fi
+        jq -n \
+          --arg repo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+          --arg ref "${GITHUB_REF}" \
+          --arg path "${workflow_path}" \
+          --arg sha "${REVISION}" \
+          --arg source_ref "${source_ref}" \
+          --arg event "${EVENT_NAME}" \
+          --arg repo_id "${REPOSITORY_ID}" \
+          --arg owner_id "${OWNER_ID}" \
+          --arg runner_env "${RUNNER_ENVIRONMENT}" \
+          --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+          '{
+            buildDefinition: {
+              buildType: "https://actions.github.io/buildtypes/workflow/v1",
+              externalParameters: { workflow: { ref: $ref, repository: $repo, path: $path } },
+              internalParameters: { github: {
+                event_name: $event, repository_id: $repo_id, repository_owner_id: $owner_id,
+                runner_environment: $runner_env
+              } },
+              resolvedDependencies: [
+                { uri: ("git+" + $repo + "@" + $source_ref), digest: { gitCommit: $sha } }
+              ]
+            },
+            runDetails: {
+              builder: { id: ($repo + "/" + $path + "@" + $ref) },
+              metadata: { invocationId: $run }
+            }
+          }' > "${RUNNER_TEMP}/provenance.json"
+        cat "${RUNNER_TEMP}/provenance.json"
+
+    - name: Attest build provenance
+      if: ${{ inputs.provenance == 'true' }}
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        DIGEST: ${{ inputs.digest }}
+      run: |
+        while read -r image; do
+          [ -n "${image}" ] || continue
+          cosign attest --yes --type slsaprovenance1 --predicate "${RUNNER_TEMP}/provenance.json" "${image}@${DIGEST}"
+        done <<<"${IMAGES}"

@@ -1,0 +1,79 @@
+name: CI
+
+# Pull requests, weekly and as the first stage of the release workflow.
+on:
+  pull_request:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pre-commit version: .github/requirements-ci.txt (Dependabot)
+      - name: Install pre-commit
+        run: pipx install "$(grep -E '^pre-commit==' .github/requirements-ci.txt)"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
+
+      # actionlint covers the workflows only – shellcheck the run scripts of the actions
+      - name: Shellcheck composite actions
+        run: python3 .github/scripts/shellcheck-actions.py
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build test image
+        run: docker build --tag shared-ci-test:local .github/test
+
+      - name: sbom
+        id: sbom
+        uses: ./sbom
+        with:
+          image: shared-ci-test:local
+
+      - name: Check SBOM
+        env:
+          SBOM: ${{ steps.sbom.outputs.file }}
+        run: |
+          jq -e '.bomFormat == "CycloneDX"' "${SBOM}"
+          jq -e '[.components[].name] | index("curl") != null' "${SBOM}"
+
+      - name: trivy-scan
+        id: scan
+        uses: ./trivy-scan
+        with:
+          image: shared-ci-test:local
+          upload-sarif: 'false'
+
+      - name: Check SARIF
+        env:
+          SARIF: ${{ steps.scan.outputs.file }}
+        run: jq -e '.runs[0].tool.driver.name == "Trivy"' "${SARIF}"

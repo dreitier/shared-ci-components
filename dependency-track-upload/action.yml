@@ -1,0 +1,89 @@
+name: Dependency-Track BOM upload
+description: >-
+  Uploads a CycloneDX SBOM to Dependency-Track (POST /api/v1/bom). The project is created on the first
+  upload (autoCreate) – the API key's team needs BOM_UPLOAD and PROJECT_CREATION_UPLOAD.
+inputs:
+  url:
+    description: Base URL of Dependency-Track (only /api/v1/bom and /api/version need to be reachable)
+    default: https://dependency-track.dreitier.com
+  api-key:
+    description: API key of the Dependency-Track team (secret DEPENDENCYTRACK_API_KEY)
+    required: true
+  bom:
+    description: Path of the CycloneDX SBOM
+    default: sbom.cdx.json
+  project-name:
+    description: Project name in Dependency-Track (default is the repository name)
+    default: ${{ github.event.repository.name }}
+  project-version:
+    description: Project version, e.g. the release version
+    required: true
+  is-latest:
+    description: Mark this version as the project's latest version
+    default: 'true'
+  wait:
+    description: Wait until Dependency-Track has processed the BOM (vulnerability analysis included)
+    default: 'false'
+  wait-timeout-seconds:
+    description: Maximum wait time with wait = true
+    default: '300'
+outputs:
+  token:
+    description: Processing token returned by Dependency-Track
+    value: ${{ steps.upload.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - name: Upload BOM
+      id: upload
+      shell: bash
+      env:
+        DT_URL: ${{ inputs.url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        BOM: ${{ inputs.bom }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PROJECT_VERSION: ${{ inputs.project-version }}
+        IS_LATEST: ${{ inputs.is-latest }}
+      run: |
+        if [ -z "${DT_API_KEY}" ]; then
+          echo "::error::api-key is empty (secret DEPENDENCYTRACK_API_KEY missing? private repositories need a repository secret)"
+          exit 1
+        fi
+        # API key via a curl config on stdin, so it never appears in the process list
+        response=$(printf 'header = "X-Api-Key: %s"\n' "${DT_API_KEY}" | curl --config - \
+          --silent --show-error --fail-with-body --retry 3 --retry-all-errors \
+          --form "autoCreate=true" \
+          --form "projectName=${PROJECT_NAME}" \
+          --form "projectVersion=${PROJECT_VERSION}" \
+          --form "isLatest=${IS_LATEST}" \
+          --form "bom=@${BOM}" \
+          "${DT_URL%/}/api/v1/bom")
+        token=$(jq -r '.token // empty' <<<"${response}")
+        if [ -z "${token}" ]; then
+          echo "::error::unexpected response from Dependency-Track: ${response}"
+          exit 1
+        fi
+        echo "token=${token}" >> "$GITHUB_OUTPUT"
+        echo "Uploaded ${BOM} to ${PROJECT_NAME} ${PROJECT_VERSION} (token ${token})"
+
+    - name: Wait for processing
+      if: ${{ inputs.wait == 'true' }}
+      shell: bash
+      env:
+        DT_URL: ${{ inputs.url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        TOKEN: ${{ steps.upload.outputs.token }}
+        TIMEOUT: ${{ inputs.wait-timeout-seconds }}
+      run: |
+        deadline=$((SECONDS + TIMEOUT))
+        while [ "${SECONDS}" -lt "${deadline}" ]; do
+          processing=$(printf 'header = "X-Api-Key: %s"\n' "${DT_API_KEY}" | curl --config - \
+            --silent --show-error --fail-with-body "${DT_URL%/}/api/v1/bom/token/${TOKEN}" | jq -r '.processing')
+          if [ "${processing}" = "false" ]; then
+            echo "Dependency-Track has processed the BOM"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "::error::Dependency-Track did not finish processing within ${TIMEOUT}s"
+        exit 1

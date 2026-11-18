@@ -1,0 +1,40 @@
+name: SBOM (CycloneDX)
+description: >-
+  Generates a CycloneDX SBOM (JSON) of a container image with Trivy – components only, no vulnerabilities
+  (Dependency-Track analyses them itself).
+inputs:
+  image:
+    description: Image reference, preferably by digest (registry/name@sha256:...). Local Docker images work too.
+    required: true
+  output:
+    description: Path of the SBOM file
+    default: sbom.cdx.json
+  trivy-version:
+    description: Trivy version
+    default: v0.76.2
+outputs:
+  file:
+    description: Path of the SBOM file
+    value: ${{ inputs.output }}
+runs:
+  using: composite
+  steps:
+    - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+      with:
+        version: ${{ inputs.trivy-version }}
+        cache: true
+
+    # Registry credentials: Trivy reads the Docker config of the job (docker login before this action)
+    - name: Generate SBOM
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        trivy image --quiet --format cyclonedx --output "${OUTPUT}" "${IMAGE}"
+        components=$(jq '.components | length' "${OUTPUT}")
+        echo "SBOM of ${IMAGE}: ${components} components → ${OUTPUT}"
+        if [ "${components}" -eq 0 ]; then
+          echo "::error::the SBOM of ${IMAGE} has no components"
+          exit 1
+        fi
