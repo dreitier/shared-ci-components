@@ -58,6 +58,12 @@ updates:
       - dependency-name: conventional-changelog-conventionalcommits
         update-types:
           - version-update:semver-major
+      # 26.x needs Node >= 26.13 (the action sets up 24) and pulls beta packages (@semantic-release/core
+      # 1.0.0-beta, commit-analyzer 14 / release-notes-generator 15 beta) – by hand once they are stable,
+      # together with node-version '26' in semantic-release/action.yml
+      - dependency-name: semantic-release
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: pre-commit
     directory: /
