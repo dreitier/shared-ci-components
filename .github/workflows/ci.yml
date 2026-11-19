@@ -77,3 +77,21 @@ jobs:
         env:
           SARIF: ${{ steps.scan.outputs.file }}
         run: jq -e '.runs[0].tool.driver.name == "Trivy"' "${SARIF}"
+
+  test-semantic-release:
+    name: Test semantic-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # release tooling of the action + dry run of its default config in a throwaway repository
+      - name: Test semantic-release action
+        run: .github/scripts/test-semantic-release.sh
