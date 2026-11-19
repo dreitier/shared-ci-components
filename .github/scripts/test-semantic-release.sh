@@ -8,6 +8,13 @@ set -euo pipefail
 action=$(cd "$(dirname "$0")/../../semantic-release" && pwd)
 npm ci --ignore-scripts --no-audit --no-fund --prefix "${action}"
 
+# semantic-release without GitHub's CI context: on pull requests env-ci takes the PR ref (refs/pull/N/merge) as
+# the branch and skips the release – the throwaway repository is on main
+sr() {
+  env -u GITHUB_ACTIONS -u GITHUB_REF -u GITHUB_HEAD_REF -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH \
+    "${action}/node_modules/.bin/semantic-release" "$@"
+}
+
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 git init --quiet --bare --initial-branch=main "${work}/remote.git"
@@ -37,7 +44,7 @@ const base = require('${action}/release.config.cjs');
 module.exports = { ...base, plugins: base.plugins.slice(0, 2) };
 JS
 # shellcheck disable=SC2016 # ${version} is semantic-release's placeholder, not a shell variable
-out=$(SHARED_RELEASE_TAG_FORMAT='v${version}' "${action}/node_modules/.bin/semantic-release" \
+out=$(SHARED_RELEASE_TAG_FORMAT='v${version}' sr \
   --dry-run --no-ci --repository-url "file://${work}/remote.git" 2>&1) || { echo "${out}"; exit 1; }
 echo "${out}"
 grep -q 'next release version is 1.0.0' <<<"${out}" || { echo "::error::expected version 1.0.0"; exit 1; }
@@ -47,7 +54,7 @@ rm release.config.cjs
 
 # the full default config the way the action passes it (--extends, no config in the repository): every plugin
 # must load. It stops afterwards at @semantic-release/github (no GitHub URL/token here) – that is expected.
-out=$("${action}/node_modules/.bin/semantic-release" --dry-run --no-ci \
+out=$(sr --dry-run --no-ci \
   --extends "${action}/release.config.cjs" --repository-url "file://${work}/remote.git" 2>&1) || true
 for plugin in commit-analyzer release-notes-generator changelog git github exec; do
   grep -q "from \"@semantic-release/${plugin}\"" <<<"${out}" \
