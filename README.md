@@ -8,6 +8,9 @@ signing identity stays the caller's workflow
 (`https://github.com/dreitier/<repo>/.github/workflows/release.yml@refs/heads/main`) and the caller keeps
 control over permissions and secrets.
 
+Exception: [`conventional-pr-title`](.github/workflows/conventional-pr-title.yml) is a reusable workflow – it
+signs nothing and is a job of its own anyway (required status check).
+
 ## Actions
 
 | Action | What | Caller needs |
@@ -91,6 +94,51 @@ jobs:
 `DEPENDENCYTRACK_API_KEY` is an organization secret for public repositories; private repositories need it as a
 repository secret (GitHub Free). Dependency-Track: only `/api/v1/bom` and `/api/version` are public at
 `https://dependency-track.dreitier.com`.
+
+### PR title (reusable workflow)
+
+Checks that the PR title is a Conventional Commit
+([`amannn/action-semantic-pull-request`](https://github.com/amannn/action-semantic-pull-request)). Together
+with squash merges whose commit title is the PR title, everything on `main` is a Conventional Commit.
+
+`.github/workflows/pr-title.yml` in the calling repository:
+
+```yaml
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read        # the called job can only narrow this
+
+jobs:
+  pr-title:
+    uses: dreitier/shared-ci-components/.github/workflows/conventional-pr-title.yml@<sha> # v1.2.0
+    # with:
+    #   types: |             # default: Conventional Commits types
+    #     feat
+    #     fix
+    #   scopes: ''           # regex per line, default: any
+    #   require-scope: false
+    #   validate-single-commit: false  # only without "Default to pull request title"
+```
+
+Repository settings (once, UI or REST API):
+
+```bash
+gh api -X PATCH repos/dreitier/<repo> \
+  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false \
+  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY
+```
+
+The check is called `pr-title / Conventional Commit`. Make it a required status check in a ruleset on the
+default branch (with *Require a pull request before merging*). GitHub Free: rulesets only for public
+repositories – in private ones the check runs but doesn't block the merge.
+
+Dependabot bumps the action pinned in the reusable workflow as `ci(deps)` (directory `/`), which doesn't release.
+Retitle that PR to `build(deps): …` before merging so callers get the update as a patch release.
 
 ## Development
 
