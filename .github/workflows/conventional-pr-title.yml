@@ -1,0 +1,44 @@
+name: Conventional PR title
+
+# Reusable workflow: checks that the pull request title is a Conventional Commit.
+# Squash-merged PRs (squash commit title = PR title) put exactly that title on main, where semantic-release
+# derives the next version from it. Caller: see README.md ("PR title").
+on:
+  workflow_call:
+    inputs:
+      types:
+        description: Allowed types, one per line (regex). Empty = Conventional Commits defaults
+        type: string
+        default: ''
+      scopes:
+        description: Allowed scopes, one per line (regex). Empty = any scope
+        type: string
+        default: ''
+      require-scope:
+        description: A scope is mandatory
+        type: boolean
+        default: false
+      validate-single-commit:
+        description: >-
+          Also check the commit message of single-commit PRs. Only needed when the repository does NOT use
+          "Default to pull request title" for squash commits
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  conventional-commit:
+    name: Conventional Commit
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: ${{ inputs.types }}
+          scopes: ${{ inputs.scopes }}
+          requireScope: ${{ inputs.require-scope }}
+          validateSingleCommit: ${{ inputs.validate-single-commit }}
