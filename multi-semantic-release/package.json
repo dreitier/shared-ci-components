@@ -1,0 +1,18 @@
+{
+  "name": "shared-ci-components-multi-semantic-release",
+  "private": true,
+  "description": "multi-semantic-release, semantic-release and plugins of the multi-semantic-release action (installed by the action, updates are build(deps) → patch release). @visulima/yaml: optional peer of @visulima/fs that multi-semantic-release imports without declaring it",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.10.0"
+  },
+  "dependencies": {
+    "@anolilab/multi-semantic-release": "4.6.3",
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/git": "11.0.1",
+    "@visulima/yaml": "2.0.0",
+    "conventional-changelog-conventionalcommits": "9.3.1",
+    "semantic-release": "25.0.9"
+  }
+}
