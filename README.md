@@ -1,6 +1,6 @@
 # shared-ci-components
 
-Composite GitHub Actions shared by the dreitier repositories: semantic-release with the release bot, SBOM,
+Composite GitHub Actions shared by the dreitier repositories: semantic-release (single and monorepo) with the release bot, SBOM,
 Trivy scan, Dependency-Track upload and keyless cosign signatures. Each repository keeps its own release workflow and calls these actions as steps.
 
 Composite actions, not reusable workflows, on purpose: they run inside the caller's job, so the keyless
@@ -16,6 +16,7 @@ signs nothing and is a job of its own anyway (required status check).
 | Action | What | Caller needs |
 | --- | --- | --- |
 | [`semantic-release`](semantic-release/action.yml) | Checkout (full history), semantic-release as dreitier-release-bot (CHANGELOG.md, tag, GitHub release), output `version`. semantic-release and plugins come with the action | variable `RELEASE_APP_CLIENT_ID`, secret `RELEASE_APP_PRIVATE_KEY` (org level for public, repository level for private repositories); bot installed on the repository |
+| [`multi-semantic-release`](multi-semantic-release/action.yml) | Monorepo variant: every npm workspace package released on its own (tag `<package>@<version>`, CHANGELOG.md per package, GitHub release per tag), output `released`/`tags` | like `semantic-release`; root `package.json` with `workspaces`, one non-private `package.json` per package |
 | [`sbom`](sbom/action.yml) | CycloneDX SBOM (JSON) of an image with Trivy, components only | registry login for remote images |
 | [`trivy-scan`](trivy-scan/action.yml) | Vulnerability scan (SARIF), optional upload to code scanning | `security-events: write` for the upload (private repos: no code scanning on GitHub Free → `upload-sarif: 'false'`) |
 | [`dependency-track-upload`](dependency-track-upload/action.yml) | Uploads the SBOM to Dependency-Track, project auto-created | secret `DEPENDENCYTRACK_API_KEY` (team with BOM_UPLOAD + PROJECT_CREATION_UPLOAD) |
@@ -54,6 +55,39 @@ Migrating a repository: set `changelog-title` to the **exact** current header of
 above the first `## ` entry, `\n` for line breaks) – the changelog plugin only replaces a header that matches,
 any other title ends up on top of the old one. Then delete `package.json`, `package-lock.json`, `.releaserc.json`
 and the npm entry of Dependabot/Renovate.
+
+### multi-semantic-release (monorepo)
+
+One version per package instead of one per repository, e.g. the OpenTofu modules in `dreitier/tofu-modules`.
+[multi-semantic-release](https://github.com/anolilab/semantic-release/tree/main/packages/multi-semantic-release)
+analyzes only the commits that touch a package's directory and releases the packages one after another.
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read         # all writes use the release bot's token
+    outputs:
+      released: ${{ steps.release.outputs.released }}   # [{"name","version","tag"}]
+    steps:
+      - id: release
+        uses: dreitier/shared-ci-components/multi-semantic-release@<sha> # v1.3.0
+        with:
+          app-client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # changelog-title: "# Changelog\n\n…"  # default: standard text, same for every package
+```
+
+The calling repository needs a root `package.json` (`"private": true`, `"workspaces": ["modules/*"]`) and a
+`package.json` per package with `name` and `"version": "0.0.0"` – the version in it is never bumped (no npm
+publish), the tags are the truth. Private packages are skipped. The default config
+([`release.config.cjs`](multi-semantic-release/release.config.cjs)) equals the single-repository one but commits
+`<package>/CHANGELOG.md` (`chore(release): <package>@x.y.z [skip ci]`) and creates one GitHub release per tag. A
+semantic-release config of the repository (`.releaserc*`, `release.config.*`) replaces it; multi-semantic-release
+options (`ignorePackages`, `tagFormat`, …) go into `.multi-releaserc.json`. `dry-run` still verifies the GitHub
+token (the GitHub plugin's verify step). Note: a first run releases every package (1.0.0) – one commit, tag and
+GitHub release each.
 
 ### Image actions
 
@@ -145,8 +179,9 @@ Retitle that PR to `build(deps): …` before merging so callers get the update a
 - `pre-commit install` – actionlint, shellcheck, file checks. CI additionally shellchecks the `run` scripts
   of the actions (`.github/scripts/shellcheck-actions.py`) – values go into scripts via `env`, never as
   `${{ }}` expressions (script injection).
-- CI tests `sbom` and `trivy-scan` against a local test image (`.github/test/Dockerfile`) and the
+- CI tests `sbom` and `trivy-scan` against a local test image (`.github/test/Dockerfile`), the
   `semantic-release` action with a dry run of its default config in a throwaway repository
-  (`.github/scripts/test-semantic-release.sh`). This repository releases itself with `./semantic-release`.
+  (`.github/scripts/test-semantic-release.sh`) and `multi-semantic-release` with real releases of a throwaway
+  monorepo (`.github/scripts/test-multi-semantic-release.sh`). This repository releases itself with `./semantic-release`.
 - PR titles are Conventional Commits; semantic-release tags `vX.Y.Z` on main. `build(deps)` (actions and npm
   packages used inside the composite actions) releases a patch, `ci(deps)` doesn't.

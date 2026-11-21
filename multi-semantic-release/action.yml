@@ -1,0 +1,93 @@
+name: multi-semantic-release with the release bot
+description: >-
+  Monorepo variant of the semantic-release action: releases every package of the npm workspaces (root
+  package.json "workspaces", one package.json per package, not private) on its own with
+  multi-semantic-release – commits filtered by the package directory, tag <package>@<version>, CHANGELOG.md per
+  package, one GitHub release per tag – as the GitHub App dreitier-release-bot. semantic-release and its plugins
+  come with the action. Without a semantic-release config of its own the repository gets release.config.cjs of
+  this action; multi-semantic-release options go into .multi-releaserc* of the repository. The bot must be
+  installed on the repository and may bypass its ruleset. Run it on push to main in a job with `contents: read`.
+inputs:
+  app-client-id:
+    description: Client ID of the release bot (vars.RELEASE_APP_CLIENT_ID)
+    required: true
+  app-private-key:
+    description: Private key of the release bot (secrets.RELEASE_APP_PRIVATE_KEY)
+    required: true
+  changelog-title:
+    description: Title (header) of every CHANGELOG.md in the default config; empty = standard text
+    default: ''
+  dry-run:
+    description: Only print what would be released ('true'), no tag, commit or release
+    default: 'false'
+  node-version:
+    description: Node.js version for multi-semantic-release
+    default: '24'
+outputs:
+  released:
+    description: 'Released packages as JSON: [{"name", "version", "tag"}] (empty list if nothing was released)'
+    value: ${{ steps.release.outputs.released }}
+  tags:
+    description: Released tags, space-separated (empty if nothing was released)
+    value: ${{ steps.release.outputs.tags }}
+runs:
+  using: composite
+  steps:
+    - name: Create GitHub App token
+      id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.app-client-id }}
+        private-key: ${{ inputs.app-private-key }}
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        # semantic-release authenticates git pushes with GITHUB_TOKEN itself
+        persist-credentials: false
+
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # hashFiles() only sees the workspace, the lock file of the action lives outside of it
+    - name: Cache key of the release tooling
+      id: lock
+      shell: bash
+      run: echo "hash=$(sha256sum "${GITHUB_ACTION_PATH}/package-lock.json" | cut -c1-64)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: shared-ci-multi-semantic-release-${{ runner.os }}-${{ steps.lock.outputs.hash }}
+
+    - name: Install multi-semantic-release
+      shell: bash
+      run: npm ci --ignore-scripts --no-audit --no-fund --prefix "${GITHUB_ACTION_PATH}"
+
+    - name: Get bot identity for the release commits
+      id: bot
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+        APP_SLUG: ${{ steps.app.outputs.app-slug }}
+      run: |
+        user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+        {
+          echo "name=${APP_SLUG}[bot]"
+          echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Run multi-semantic-release
+      id: release
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        GIT_AUTHOR_NAME: ${{ steps.bot.outputs.name }}
+        GIT_AUTHOR_EMAIL: ${{ steps.bot.outputs.email }}
+        GIT_COMMITTER_NAME: ${{ steps.bot.outputs.name }}
+        GIT_COMMITTER_EMAIL: ${{ steps.bot.outputs.email }}
+        SHARED_RELEASE_CHANGELOG_TITLE: ${{ inputs.changelog-title }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      # plugins are resolved next to semantic-release, i.e. from the action's node_modules
+      run: node "${GITHUB_ACTION_PATH}/run.mjs"
