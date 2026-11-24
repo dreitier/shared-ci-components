@@ -85,9 +85,11 @@ publish), the tags are the truth. Private packages are skipped. The default conf
 ([`release.config.cjs`](multi-semantic-release/release.config.cjs)) equals the single-repository one but commits
 `<package>/CHANGELOG.md` (`chore(release): <package>@x.y.z [skip ci]`) and creates one GitHub release per tag. A
 semantic-release config of the repository (`.releaserc*`, `release.config.*`) replaces it; multi-semantic-release
-options (`ignorePackages`, `tagFormat`, …) go into `.multi-releaserc.json`. `dry-run` still verifies the GitHub
-token (the GitHub plugin's verify step). Note: a first run releases every package (1.0.0) – one commit, tag and
-GitHub release each.
+options (`ignorePackages`, `tagFormat`, …) go into `.multi-releaserc.json`. Besides the default config's plugins,
+the action ships `@semantic-release/exec` for such repository configs (e.g. `dreitier/helm-charts`: `prepareCmd`
+bumps `Chart.yaml`, tag format `${name}-${version}`, no GitHub release). `dry-run` still verifies the GitHub token
+(the GitHub plugin's verify step). Note: a first run releases every package (1.0.0) – one commit, tag and GitHub
+release each.
 
 ### Image actions
 
