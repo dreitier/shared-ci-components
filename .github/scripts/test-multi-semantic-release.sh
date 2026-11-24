@@ -80,7 +80,10 @@ module.exports = {
   ],
 };
 JS
-echo '{ "tagFormat": "${name}-${version}" }' > .multi-releaserc.json
+# quoted heredoc: ${name}/${version} are multi-semantic-release placeholders, not shell variables
+cat > .multi-releaserc.json <<'JSON'
+{ "tagFormat": "${name}-${version}" }
+JSON
 # the tag format changes, so the history above doesn't count: a new first release per package
 git add -A
 git commit --quiet -m "feat(beta): exec and tag format"
