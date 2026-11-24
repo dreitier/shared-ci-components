@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Test of the multi-semantic-release action without GitHub: installs its release tooling, then releases a
 # throwaway monorepo (two packages, local bare remote) with the default config minus the GitHub plugin.
-# Checks: one tag <package>@<version> and one CHANGELOG.md per package, release commits pushed, and that a later
-# commit releases only the package whose directory it touches.
+# Checks: one tag <package>@<version> and one CHANGELOG.md per package, release commits pushed, that a later
+# commit releases only the package whose directory it touches, and that a repository config can use
+# @semantic-release/exec (shipped with the action) and a custom tagFormat (.multi-releaserc.json, e.g. helm-charts).
 set -euo pipefail
 
 action=$(cd "$(dirname "$0")/../../multi-semantic-release" && pwd)
@@ -64,6 +65,32 @@ tags=$(git ls-remote --tags origin)
 check 'refs/tags/alpha@1.0.1' "${tags}" "tag alpha@1.0.1 missing"
 if grep -q 'beta@1.0.1' <<<"${tags}"; then echo "${out}"; echo "::error::beta released without changes"; exit 1; fi
 check '"tag":"alpha@1.0.1"' "$(cat "${work}/output")" "output without alpha@1.0.1"
+
+# a repository config with @semantic-release/exec (prepareCmd runs in the package directory, its output is
+# committed) and the tag format <package>-<version> from .multi-releaserc.json, like dreitier/helm-charts
+cat > release.config.cjs <<JS
+const base = require('${action}/release.config.cjs');
+const plugins = base.plugins.filter((p) => !['@semantic-release/github', '@semantic-release/git'].includes(Array.isArray(p) ? p[0] : p));
+module.exports = {
+  ...base,
+  plugins: [
+    ...plugins,
+    ['@semantic-release/exec', { prepareCmd: 'echo \${nextRelease.version} > VERSION' }],
+    ['@semantic-release/git', { assets: ['CHANGELOG.md', 'VERSION'], message: 'chore(release): \${nextRelease.gitTag} [skip ci]' }],
+  ],
+};
+JS
+echo '{ "tagFormat": "${name}-${version}" }' > .multi-releaserc.json
+# the tag format changes, so the history above doesn't count: a new first release per package
+git add -A
+git commit --quiet -m "feat(beta): exec and tag format"
+git push --quiet origin main
+out=$(msr 2>&1) || { echo "${out}"; exit 1; }
+tags=$(git ls-remote --tags origin)
+check 'refs/tags/beta-1.0.0' "${tags}" "tag beta-1.0.0 (tagFormat from .multi-releaserc.json) missing"
+git pull --quiet origin main
+check '1.0.0' "$(cat modules/beta/VERSION 2>/dev/null)" "modules/beta/VERSION from @semantic-release/exec not committed"
+rm .multi-releaserc.json
 
 # the full default config the way the action passes it (no config in the repository, "extends" to the action's
 # config): it must get as far as @semantic-release/github, which stops without a GitHub URL/token – expected.
